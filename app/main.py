@@ -444,33 +444,21 @@ async def get_stock_intraday(
 async def get_stock_history(symbol: str):
     try:
         sess = _yf_session()
-        # primary path: download with session
-        df = yf.download(
-            symbol,
-            period="2mo",          # fetch more, then trim
-            interval="1d",
-            auto_adjust=True,
-            progress=False,
-            threads=False,
-            session=sess,          # <- valid here
-        )
+        stock = yf.Ticker(symbol, session=sess)  # <- pass session here
+        data = stock.history(period="14d", interval="1d", auto_adjust=True)
 
-        if (df is None) or df.empty or ("Close" not in df.columns):
-            # fallback via Ticker(history without session kw)
-            t = yf.Ticker(symbol, session=sess)
-            df = t.history(period="2mo", interval="1d", auto_adjust=True)
-
-        if (df is None) or df.empty or ("Close" not in df.columns):
+        if data is None or data.empty or "Close" not in data:
             return {"symbol": symbol, "history": []}
 
-        tail = df["Close"].tail(10)
+        trading_days = data.index[-10:]
+        prices = data["Close"].iloc[-10:]
         history = [
-            {"date": idx.strftime("%d-%m"), "price": round(float(val), 3)}
-            for idx, val in tail.items()
+            {"date": dt.strftime("%d-%m"), "price": round(float(px), 3)}
+            for dt, px in zip(trading_days, prices)
         ]
         return {"symbol": symbol, "history": history}
     except Exception as e:
-        return {"error": f"yfinance error: {e}"}
+        return {"error": str(e)}
 
 # ✅ Fetch all financial data (income, cash flow, balance sheet) for a company
 @app.get("/company/{ticker}")
