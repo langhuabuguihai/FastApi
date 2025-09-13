@@ -68,7 +68,6 @@ app.add_middleware(
 def healthz():
     return {"ok": True}
 
-Base.metadata.create_all(bind=engine)
 
 MODEL_DIR = r"D:\Downloads\save_api\modelsQ2"
 
