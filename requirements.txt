@@ -29,3 +29,6 @@ requests==2.32.3
 
 # --- Firebase (only if you actually use it) ---
 firebase-admin==6.5.0
+
+# ML libraries (add these lines if missing)
+xgboost==2.0.3
