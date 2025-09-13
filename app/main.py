@@ -443,19 +443,34 @@ async def get_stock_intraday(
 @app.get("/stock-history/{symbol}")
 async def get_stock_history(symbol: str):
     try:
-        sess= _yf_session()
-        stock = yf.Ticker(symbol)
-        data = stock.history(period="14d", session=sess)  # ✅ Fetch last 14 calendar days to include 10 trading days
-        
-        # ✅ Filter last 10 trading days (skip weekends)
-        trading_days = data.index[-10:]
-        prices = data["Close"].iloc[-10:]
-        
-        history = [{"date": date.strftime("%d-%m"), "price": round(price, 3)} for date, price in zip(trading_days, prices)]
+        sess = _yf_session()
+        # primary path: download with session
+        df = yf.download(
+            symbol,
+            period="2mo",          # fetch more, then trim
+            interval="1d",
+            auto_adjust=True,
+            progress=False,
+            threads=False,
+            session=sess,          # <- valid here
+        )
+
+        if (df is None) or df.empty or ("Close" not in df.columns):
+            # fallback via Ticker(history without session kw)
+            t = yf.Ticker(symbol, session=sess)
+            df = t.history(period="2mo", interval="1d", auto_adjust=True)
+
+        if (df is None) or df.empty or ("Close" not in df.columns):
+            return {"symbol": symbol, "history": []}
+
+        tail = df["Close"].tail(10)
+        history = [
+            {"date": idx.strftime("%d-%m"), "price": round(float(val), 3)}
+            for idx, val in tail.items()
+        ]
         return {"symbol": symbol, "history": history}
-    
     except Exception as e:
-        return {"error": str(e)}
+        return {"error": f"yfinance error: {e}"}
 
 # ✅ Fetch all financial data (income, cash flow, balance sheet) for a company
 @app.get("/company/{ticker}")
