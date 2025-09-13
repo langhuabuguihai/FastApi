@@ -96,7 +96,6 @@ db_config = {
 }
 
 # ✅ Initialize Firebase Firestore
-firebase_admin.initialize_app(cred)
 db = firestore.client()
 
 @app.on_event("startup")
