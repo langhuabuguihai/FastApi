@@ -113,13 +113,62 @@ def firebase_ping():
 
 def _yf_session():
     s = requests.Session()
-    # Pretend to be a normal browser (helps avoid empty/blocked responses)
     s.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                      "AppleWebKit/537.36 (KHTML, like Gecko) "
-                      "Chrome/124.0 Safari/537.36"
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0 Safari/537.36"
+        ),
+        "Accept": "application/json,text/plain,*/*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Connection": "keep-alive",
     })
     return s
+
+def _yahoo_chart_fallback(symbol: str, days: int = 10, session: requests.Session | None = None):
+    """Call Yahoo's chart API directly as a fallback to yfinance."""
+    s = session or requests.Session()
+    params = {
+        "range": "2mo",
+        "interval": "1d",
+        "includeAdjustedClose": "true",
+    }
+    for host in ("query1", "query2"):
+        url = f"https://{host}.finance.yahoo.com/v8/finance/chart/{symbol}"
+        r = s.get(url, params=params, timeout=15)
+        if r.status_code != 200:
+            continue
+        j = r.json()
+        result = j.get("chart", {}).get("result")
+        if not result:
+            continue
+        res = result[0]
+        ts = res.get("timestamp", []) or []
+        q = res.get("indicators", {}).get("quote", [{}])[0]
+        closes = q.get("close", []) or []
+
+        # Some series store adjusted close separately
+        if not closes or all(v is None for v in closes):
+            adj = res.get("indicators", {}).get("adjclose", [{}])[0].get("adjclose", []) or []
+            closes = adj
+
+        # Build last N points, skipping None/NaN
+        pairs = []
+        for t, c in zip(ts, closes):
+            if c is None:
+                continue
+            try:
+                if isnan(c):  # type: ignore[arg-type]
+                    continue
+            except Exception:
+                pass
+            dt = datetime.utcfromtimestamp(int(t))
+            pairs.append({"date": dt.strftime("%d-%m"), "price": round(float(c), 3)})
+
+        if pairs:
+            return pairs[-days:]  # last N days
+
+    return []  # nothing from both hosts
 
 features = [
     'RSI','RSI_7', 'RSI_21', 'MACD', 'MACD_signal', 'MACD_histogram', 'bb_bbm', 'bb_bbh', 'bb_bbl', 'bb_bbw', 
@@ -441,24 +490,38 @@ async def get_stock_intraday(
 #         return {"error": str(e)}
 
 @app.get("/stock-history/{symbol}")
-async def get_stock_history(symbol: str):
+async def get_stock_history(symbol: str, days: int = 10):
     try:
         sess = _yf_session()
-        stock = yf.Ticker(symbol, session=sess)  # <- pass session here
-        data = stock.history(period="14d", interval="1d", auto_adjust=True)
 
-        if data is None or data.empty or "Close" not in data:
-            return {"symbol": symbol, "history": []}
+        # 1) Primary: yfinance (with explicit session & safe options)
+        df = yf.download(
+            symbol,
+            period="2mo",
+            interval="1d",
+            auto_adjust=True,
+            progress=False,
+            threads=False,
+            session=sess,   # <- important on PaaS
+        )
 
-        trading_days = data.index[-10:]
-        prices = data["Close"].iloc[-10:]
-        history = [
-            {"date": dt.strftime("%d-%m"), "price": round(float(px), 3)}
-            for dt, px in zip(trading_days, prices)
-        ]
-        return {"symbol": symbol, "history": history}
+        if df is not None and not df.empty and "Close" in df.columns:
+            tail = df["Close"].tail(days)
+            history = [
+                {"date": idx.strftime("%d-%m"), "price": round(float(val), 3)}
+                for idx, val in tail.items()
+                if val == val  # filter NaN
+            ]
+            if history:
+                return {"symbol": symbol, "history": history, "source": "yfinance"}
+
+        # 2) Fallback: direct Yahoo Chart API
+        history = _yahoo_chart_fallback(symbol, days=days, session=sess)
+        return {"symbol": symbol, "history": history, "source": "yahoo-chart"}
+
     except Exception as e:
-        return {"error": str(e)}
+        # Bubble up a clear error
+        raise HTTPException(status_code=502, detail=f"price fetch failed: {e}" )
 
 # ✅ Fetch all financial data (income, cash flow, balance sheet) for a company
 @app.get("/company/{ticker}")
