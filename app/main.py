@@ -111,6 +111,16 @@ def firebase_ping():
     return {"collections": db.collections() is not None}
 
 
+def _yf_session():
+    s = requests.Session()
+    # Pretend to be a normal browser (helps avoid empty/blocked responses)
+    s.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                      "AppleWebKit/537.36 (KHTML, like Gecko) "
+                      "Chrome/124.0 Safari/537.36"
+    })
+    return s
+
 features = [
     'RSI','RSI_7', 'RSI_21', 'MACD', 'MACD_signal', 'MACD_histogram', 'bb_bbm', 'bb_bbh', 'bb_bbl', 'bb_bbw', 
     'ATR', 'OBV', 'Close_lag1', 'Close_lag2', 'Close_lag5', 'Close_lag10',
@@ -433,8 +443,9 @@ async def get_stock_intraday(
 @app.get("/stock-history/{symbol}")
 async def get_stock_history(symbol: str):
     try:
+        sess= _yf_session()
         stock = yf.Ticker(symbol)
-        data = stock.history(period="14d")  # ✅ Fetch last 14 calendar days to include 10 trading days
+        data = stock.history(period="14d", session=sess)  # ✅ Fetch last 14 calendar days to include 10 trading days
         
         # ✅ Filter last 10 trading days (skip weekends)
         trading_days = data.index[-10:]
