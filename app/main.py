@@ -45,6 +45,12 @@ from fastapi import HTTPException
 from pydantic import BaseModel
 from typing import Optional
 from fastapi.middleware.cors import CORSMiddleware
+from .database import Base, engine
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from .firebase_init import init_firebase
+from firebase_admin import firestore
 
 
 ALLOWED = ["*"] 
@@ -63,6 +69,7 @@ app.add_middleware(
 def healthz():
     return {"ok": True}
 
+Base.metadata.create_all(bind=engine)
 
 MODEL_DIR = r"D:\Downloads\save_api\modelsQ2"
 
@@ -94,6 +101,20 @@ db_config = {
 cred = credentials.Certificate(r"D:\Downloads\flutterapi-76183-firebase-adminsdk-fbsvc-7592ed3bd5.json")
 firebase_admin.initialize_app(cred)
 db = firestore.client()
+
+@app.on_event("startup")
+def _startup():
+    init_firebase()
+
+@app.get("/healthz")
+def healthz():
+    return {"ok": True}
+
+@app.get("/firebase-ping")
+def firebase_ping():
+    db = firestore.client()           # now safe: app is initialized
+    return {"collections": db.collections() is not None}
+
 
 features = [
     'RSI','RSI_7', 'RSI_21', 'MACD', 'MACD_signal', 'MACD_histogram', 'bb_bbm', 'bb_bbh', 'bb_bbl', 'bb_bbw', 
