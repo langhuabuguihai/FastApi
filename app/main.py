@@ -91,8 +91,8 @@ db_config = {
 }
 
 # ✅ Initialize Firebase Firestore
-cred = credentials.Certificate(r"D:\Downloads\flutterapi-76183-firebase-adminsdk-fbsvc-7592ed3bd5.json")
-firebase_admin.initialize_app(cred)
+#cred = credentials.Certificate(r"D:\Downloads\flutterapi-76183-firebase-adminsdk-fbsvc-7592ed3bd5.json")
+#firebase_admin.initialize_app(cred)
 db = firestore.client()
 
 features = [
