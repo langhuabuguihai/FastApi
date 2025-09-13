@@ -3,7 +3,6 @@ from firebase_admin import credentials, firestore
 import requests
 import mysql.connector
 from sklearn.linear_model import LogisticRegression
-from yahoo_fin import stock_info
 from fastapi import FastAPI
 import yfinance as yf
 import pymysql
