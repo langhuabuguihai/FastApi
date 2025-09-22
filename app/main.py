@@ -488,7 +488,7 @@ async def get_stock_history(symbol: str, days: int = 10):
 
         # 2) Fallback: direct Yahoo Chart API
         history = _yahoo_chart_fallback(symbol, days=days, session=sess)
-        return {"symbol": symbol, "history": history, "source": "yahoo-chart"}
+        return {"symbol": symbol, "history": history, }
 
     except Exception as e:
         # Bubble up a clear error
