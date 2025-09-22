@@ -334,11 +334,51 @@ def prepare_live_features(ticker):
     return df.drop(columns=["Close"])
 
 # ✅ Cache for stock prices (Dictionary: {ticker: {price, timestamp}})
-stock_cache: dict[str, dict] = {}
+stock_cache = {}  # keep your existing cache dict
 
-def _clean_symbol(sym: str) -> str:
-    # strip whitespace and a leading '$' if user passes things like "$6888.KL"
-    return sym.strip().lstrip("$")
+def _clean_symbol(s: str) -> str:
+    return s.strip()
+
+from typing import List, Dict
+
+def _serialize_df_intraday(df, tz: str) -> List[Dict]:
+    """
+    Convert a minute-bar DataFrame (Open, High, Low, Close, Volume) into the target list of dicts:
+    {t, o, h, l, c, v} with:
+      - t = ISO-8601 string including +08:00 (or whatever tz is passed)
+      - o,h,l,c = raw Python floats (no rounding)
+      - v = int (0 if NaN)
+    """
+    out = []
+    # Ensure tz-aware and converted to the requested tz
+    if df.index.tz is None:
+        df.index = df.index.tz_localize("UTC")
+    df = df.tz_convert(tz)
+
+    # Use .itertuples for speed and stable column access
+    # DataFrame columns assumed: ['Open','High','Low','Close','Volume', ...]
+    for ts, row in df.iterrows():
+        # NOTE: keep raw float precision; don't round to preserve values like 0.5899999737739563
+        o = float(row.get("Open", float("nan")))
+        h = float(row.get("High", float("nan")))
+        l = float(row.get("Low", float("nan")))
+        c = float(row.get("Close", float("nan")))
+        v_raw = row.get("Volume", 0)
+        try:
+            v = 0 if v_raw != v_raw else int(v_raw)  # handle NaN -> 0
+        except Exception:
+            v = 0
+
+        out.append({
+            "t": ts.isoformat(),  # e.g. "2025-09-22T09:00:00+08:00"
+            "o": o,
+            "h": h,
+            "l": l,
+            "c": c,
+            "v": v,
+        })
+    return out
+
 
 def _serialize_df(df: pd.DataFrame) -> list[dict]:
     # Expect columns: Open, High, Low, Close, Volume; index as tz-aware DatetimeIndex
@@ -363,14 +403,15 @@ async def get_stock_intraday(
     ttl_seconds: int = Query(60, ge=0, le=3600, description="Cache TTL in seconds"),
 ):
     """
-    Return the *latest trading day's* intraday OHLCV series + latest price.
+    Return the latest trading day's intraday OHLCV series + latest price,
+    formatted to match the known-good local output.
     """
-
     try:
         symbol = _clean_symbol(symbol)
         cache_key = f"{symbol}|{interval}|{tz}|{include_prepost}"
         now = time.time()
 
+        # Serve from cache if fresh
         if cache_key in stock_cache and (now - stock_cache[cache_key]["timestamp"] < ttl_seconds):
             cached = stock_cache[cache_key]
             return {
@@ -383,8 +424,7 @@ async def get_stock_intraday(
                 "cached": True,
             }
 
-        # Try requested interval first, then fallbacks commonly supported by Yahoo
-        tried = []
+        # Try requested interval first, then common fallbacks
         intervals_to_try = []
         if interval not in intervals_to_try:
             intervals_to_try.append(interval)
@@ -397,28 +437,23 @@ async def get_stock_intraday(
         df_final = None
 
         for iv in intervals_to_try:
-            tried.append(iv)
-            # First attempt: last 1 day
+            # Primary attempt: last 1 day
             df = ticker.history(period="1d", interval=iv, prepost=include_prepost, auto_adjust=False)
 
-            # Some tickers/regions don't return 1d/1m data out of hours; try 5d and slice the last trading day.
+            # Fallback: last 5 days (slice latest day)
             if df.empty:
                 df = ticker.history(period="5d", interval=iv, prepost=include_prepost, auto_adjust=False)
 
             if df.empty:
                 continue
 
-            # Ensure timezone-aware index and convert to requested tz
+            # Ensure tz-aware and convert to requested tz, then slice last trading day
             if df.index.tz is None:
-                # yfinance sometimes returns naive timestamps -> treat as UTC
                 df.index = df.index.tz_localize("UTC")
-            df = df.tz_convert(tz)
+            df_local = df.tz_convert(tz)
+            last_trading_date = df_local.index[-1].date()
+            df_day = df_local[df_local.index.date == last_trading_date]
 
-            # Keep only the most recent trading day present in df
-            last_trading_date = df.index[-1].date()
-            df_day = df[df.index.date == last_trading_date]
-
-            # If we got bars for that day, we're good
             if not df_day.empty:
                 used_interval = iv
                 df_final = df_day
@@ -428,15 +463,18 @@ async def get_stock_intraday(
             return JSONResponse(
                 status_code=404,
                 content={
-                    "error": f"No intraday data available for {symbol} (tried intervals: {tried}). "
+                    "error": f"No intraday data available for {symbol} (tried intervals: {intervals_to_try}). "
                              "The symbol may be invalid or delisted, or intraday data may be unavailable."
                 },
             )
 
-        latest_price = round(float(df_final["Close"].iloc[-1]), 4)
-        series = _serialize_df(df_final)
+        # Build series with exact formatting
+        series = _serialize_df_intraday(df_final, tz)
 
-        # Update cache
+        # latest_price = last close (NO rounding)
+        latest_price = float(df_final["Close"].iloc[-1])
+
+        # Cache
         stock_cache[cache_key] = {
             "timestamp": now,
             "interval": used_interval,
@@ -446,7 +484,7 @@ async def get_stock_intraday(
 
         return {
             "symbol": symbol,
-            "interval": used_interval,
+            "interval": used_interval,  # will be the requested interval if it succeeded
             "tz": tz,
             "latest_price": latest_price,
             "series_count": len(series),
@@ -456,38 +494,6 @@ async def get_stock_intraday(
 
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
-
-
-
-# @app.get("/stock/{symbol}")
-# async def get_stock_price(symbol: str):
-#     try:
-#         current_time = time.time()
-        
-#         # ✅ Check cache (only fetch new data if 1 minute has passed)
-#         if symbol in stock_cache and (current_time - stock_cache[symbol]["timestamp"] < 60):
-#             return {
-#                 "symbol": symbol,
-#                 "price": stock_cache[symbol]["price"],
-#                 "cached": True
-#             }
-
-#         # ✅ Fetch real-time stock price from Yahoo Finance
-#         stock = yf.Ticker(symbol)
-#         data = stock.history(period="1d", interval="1m")
-        
-#         if not data.empty:
-#             latest_price = round(data["Close"].iloc[-1], 3)
-
-#             # ✅ Update cache
-#             stock_cache[symbol] = {"price": latest_price, "timestamp": current_time}
-
-#             return {"symbol": symbol, "price": latest_price, "cached": False}
-        
-#         return {"error": "Stock not found"}
-    
-#     except Exception as e:
-#         return {"error": str(e)}
 
 @app.get("/stock-history/{symbol}")
 async def get_stock_history(symbol: str, days: int = 10):
