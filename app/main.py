@@ -459,35 +459,6 @@ async def get_stock_intraday(
 
 
 
-# @app.get("/stock/{symbol}")
-# async def get_stock_price(symbol: str):
-#     try:
-#         current_time = time.time()
-        
-#         # ✅ Check cache (only fetch new data if 1 minute has passed)
-#         if symbol in stock_cache and (current_time - stock_cache[symbol]["timestamp"] < 60):
-#             return {
-#                 "symbol": symbol,
-#                 "price": stock_cache[symbol]["price"],
-#                 "cached": True
-#             }
-
-#         # ✅ Fetch real-time stock price from Yahoo Finance
-#         stock = yf.Ticker(symbol)
-#         data = stock.history(period="1d", interval="1m")
-        
-#         if not data.empty:
-#             latest_price = round(data["Close"].iloc[-1], 3)
-
-#             # ✅ Update cache
-#             stock_cache[symbol] = {"price": latest_price, "timestamp": current_time}
-
-#             return {"symbol": symbol, "price": latest_price, "cached": False}
-        
-#         return {"error": "Stock not found"}
-    
-#     except Exception as e:
-#         return {"error": str(e)}
 
 @app.get("/stock-history/{symbol}")
 async def get_stock_history(symbol: str, days: int = 10):
@@ -513,7 +484,7 @@ async def get_stock_history(symbol: str, days: int = 10):
                 if val == val  # filter NaN
             ]
             if history:
-                return {"symbol": symbol, "history": history, "source": "yfinance"}
+                return {"symbol": symbol, "history": history}
 
         # 2) Fallback: direct Yahoo Chart API
         history = _yahoo_chart_fallback(symbol, days=days, session=sess)
